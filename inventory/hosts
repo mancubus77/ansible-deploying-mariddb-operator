@@ -1,0 +1,12 @@
+# ==============================================================================
+# Ansible Inventory File
+# ==============================================================================
+#
+# This playbook runs entirely on your local machine (localhost).
+# It does NOT SSH into any remote servers.
+# Instead, it uses kubectl/Helm commands from your machine to talk
+# to the Kubernetes cluster over the network.
+# ==============================================================================
+
+[local]
+localhost ansible_connection=local

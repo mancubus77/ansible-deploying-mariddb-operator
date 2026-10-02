@@ -1,0 +1,18 @@
+# ==============================================================================
+# vault.yml.example
+# ==============================================================================
+#
+# This file shows what your REAL vault.yml should contain.
+#
+# DO NOT commit the real vault.yml to version control!
+# Instead, create an encrypted copy:
+#
+#   ansible-vault create vault.yml
+#
+# Then paste the contents below (with your actual password) into the editor
+# that opens.  Ansible will encrypt the file automatically.
+# ==============================================================================
+
+# The root password for MariaDB.
+# Replace the placeholder with a strong, unique password.
+mariadb_root_password: "REPLACE_WITH_YOUR_ACTUAL_PASSWORD"

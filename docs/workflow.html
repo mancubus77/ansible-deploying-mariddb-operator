@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MariaDB Operator Playbook – Workflow</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --accent: #38bdf8;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #facc15;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 2rem 1rem;
+    min-height: 100vh;
+  }
+  h1 {
+    text-align: center;
+    font-size: 1.8rem;
+    margin-bottom: .3rem;
+    color: var(--accent);
+  }
+  .subtitle {
+    text-align: center;
+    color: var(--muted);
+    margin-bottom: 2.5rem;
+    font-size: .95rem;
+  }
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    max-width: 620px;
+    margin: 0 auto;
+  }
+
+  /* ── Cards ─────────────────────────────────────────────────── */
+  .step {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.3rem 1.5rem;
+    width: 100%;
+    position: relative;
+    cursor: pointer;
+    transition: border-color .2s, box-shadow .2s, transform .15s;
+  }
+  .step:hover { border-color: var(--accent); box-shadow: 0 0 20px rgba(56,189,248,.15); transform: translateY(-2px); }
+  .step.active { border-color: var(--accent); box-shadow: 0 0 24px rgba(56,189,248,.25); }
+
+  .step-header { display: flex; align-items: center; gap: .75rem; }
+  .step-num {
+    flex-shrink: 0;
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: .9rem;
+    color: var(--bg);
+  }
+  .step-num.pre   { background: var(--yellow); }
+  .step-num.task   { background: var(--accent); }
+  .step-num.handler{ background: var(--green); }
+
+  .step-title { font-weight: 600; font-size: 1.05rem; }
+  .step-tag {
+    margin-left: auto;
+    font-size: .7rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    padding: .15rem .55rem;
+    border-radius: 6px;
+    font-weight: 600;
+  }
+  .step-tag.pre     { background: rgba(250,204,21,.15); color: var(--yellow); }
+  .step-tag.task    { background: rgba(56,189,248,.15);  color: var(--accent); }
+  .step-tag.handler { background: rgba(74,222,128,.15);  color: var(--green); }
+
+  .step-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height .35s ease, margin-top .35s ease;
+    margin-top: 0;
+    color: var(--muted);
+    font-size: .92rem;
+    line-height: 1.55;
+  }
+  .step.active .step-body { max-height: 500px; margin-top: 1rem; }
+
+  .step-body p { margin-bottom: .5rem; }
+  .step-body .analogy {
+    background: rgba(56,189,248,.08);
+    border-left: 3px solid var(--accent);
+    padding: .5rem .75rem;
+    border-radius: 0 8px 8px 0;
+    margin-top: .4rem;
+    font-style: italic;
+  }
+
+  /* ── Connector arrows ──────────────────────────────────────── */
+  .connector {
+    width: 2px; height: 32px;
+    background: var(--border);
+    position: relative;
+  }
+  .connector::after {
+    content: '▼';
+    position: absolute;
+    bottom: -6px; left: 50%;
+    transform: translateX(-50%);
+    font-size: .55rem;
+    color: var(--muted);
+  }
+
+  /* ── Decision diamond ──────────────────────────────────────── */
+  .decision {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    gap: .8rem;
+    align-items: center;
+  }
+  .decision .yes, .decision .no {
+    font-size: .8rem;
+    padding: .25rem .7rem;
+    border-radius: 20px;
+    font-weight: 600;
+  }
+  .decision .yes { background: rgba(74,222,128,.15); color: var(--green); }
+  .decision .no  { background: rgba(248,113,113,.15); color: var(--red); }
+  .diamond {
+    width: 24px; height: 24px;
+    background: var(--yellow);
+    transform: rotate(45deg);
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  /* ── Legend ─────────────────────────────────────────────────── */
+  .legend {
+    display: flex; justify-content: center; gap: 1.5rem;
+    margin-top: 2.5rem;
+    flex-wrap: wrap;
+  }
+  .legend-item { display: flex; align-items: center; gap: .4rem; font-size: .82rem; color: var(--muted); }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+
+  /* ── Responsive ────────────────────────────────────────────── */
+  @media (max-width: 500px) {
+    .step { padding: 1rem 1.1rem; }
+    h1 { font-size: 1.3rem; }
+  }
+</style>
+</head>
+<body>
+
+<h1>🗄️ MariaDB Operator Playbook</h1>
+<p class="subtitle">Click any step to expand its plain-English explanation</p>
+
+<div class="pipeline">
+
+  <!-- Step 1 – Safety Check -->
+  <div class="step" data-index="0">
+    <div class="step-header">
+      <div class="step-num pre">1</div>
+      <span class="step-title">Safety Check</span>
+      <span class="step-tag pre">pre-task</span>
+    </div>
+    <div class="step-body">
+      <p><strong>What:</strong> Before doing anything, verify that the database root password has been provided.</p>
+      <p><strong>Why:</strong> Deploying a database without a password would leave it wide open. This guard stops the process immediately with a clear error message.</p>
+      <div class="analogy">💡 Analogy: Like a pilot's checklist — confirm fuel is loaded before taxiing to the runway.</div>
+    </div>
+  </div>
+
+  <div class="connector"></div>
+  <div class="decision">
+    <span class="yes">✔ Password OK</span>
+    <div class="diamond"></div>
+    <span class="no">✖ Missing → STOP</span>
+  </div>
+  <div class="connector"></div>
+
+  <!-- Step 2 – Add Helm Repo -->
+  <div class="step" data-index="1">
+    <div class="step-header">
+      <div class="step-num task">2</div>
+      <span class="step-title">Add Helm Repository</span>
+      <span class="step-tag task">task</span>
+    </div>
+    <div class="step-body">
+      <p><strong>What:</strong> Register the Presslabs chart repository with Helm.</p>
+      <p><strong>Why:</strong> Helm needs to know the URL of the "app store" where the MariaDB Operator package lives before it can download anything.</p>
+      <div class="analogy">💡 Analogy: Adding a new app store to your phone so you can download a specific app.</div>
+    </div>
+  </div>
+
+  <div class="connector"></div>
+
+  <!-- Step 3 – Create Namespace -->
+  <div class="step" data-index="2">
+    <div class="step-header">
+      <div class="step-num task">3</div>
+      <span class="step-title">Create Namespace</span>
+      <span class="step-tag task">task</span>
+    </div>
+    <div class="step-body">
+      <p><strong>What:</strong> Create a dedicated area called <code>mariadb-operator</code> inside the Kubernetes cluster.</p>
+      <p><strong>Why:</strong> Namespaces keep resources organised and isolated. The Operator's pods, secrets, and services live here — separate from everything else.</p>
+      <div class="analogy">💡 Analogy: Creating a new folder on your computer to keep project files in one place.</div>
+    </div>
+  </div>
+
+  <div class="connector"></div>
+
+  <!-- Step 4 – Store Secret -->
+  <div class="step" data-index="3">
+    <div class="step-header">
+      <div class="step-num task">4</div>
+      <span class="step-title">Store Root Password</span>
+      <span class="step-tag task">task</span>
+    </div>
+    <div class="step-body">
+      <p><strong>What:</strong> Save the MariaDB root password as an encrypted Kubernetes Secret inside the cluster.</p>
+      <p><strong>Why:</strong> Passwords should never be stored in plain text. Kubernetes Secrets are access-controlled — only authorised pods can read them.</p>
+      <p><em>This step is skipped during uninstall (<code>state: absent</code>).</em></p>
+      <div class="analogy">💡 Analogy: Putting a house key inside a locked key-safe that only approved family members know the combination to.</div>
+    </div>
+  </div>
+
+  <div class="connector"></div>
+
+  <!-- Step 5 – Helm Install -->
+  <div class="step" data-index="4">
+    <div class="step-header">
+      <div class="step-num task">5</div>
+      <span class="step-title">Install / Upgrade Operator</span>
+      <span class="step-tag task">task</span>
+    </div>
+    <div class="step-body">
+      <p><strong>What:</strong> Use Helm to deploy (or upgrade) the MariaDB Operator into the cluster. The playbook waits up to 10 minutes for the deployment to become healthy.</p>
+      <p><strong>Why:</strong> This is the core step — it installs the software that will manage databases on your behalf. Pinning a specific chart version ensures repeatability.</p>
+      <div class="analogy">💡 Analogy: Installing an app from the store and waiting for the "Installation complete" confirmation.</div>
+    </div>
+  </div>
+
+  <div class="connector"></div>
+
+  <!-- Step 6 – Handler: Readiness -->
+  <div class="step" data-index="5">
+    <div class="step-header">
+      <div class="step-num handler">6</div>
+      <span class="step-title">Wait for Readiness</span>
+      <span class="step-tag handler">handler</span>
+    </div>
+    <div class="step-body">
+      <p><strong>What:</strong> After all tasks finish, check that the Operator Deployment has the correct number of healthy replicas.</p>
+      <p><strong>Why:</strong> This handler only fires when Step 5 made a change. On repeat runs where nothing changed it is skipped — saving time.</p>
+      <p><strong>How:</strong> Ansible polls the Deployment's <code>status.availableReplicas</code> until it equals <code>1</code> (or the configured count), or until the 10-minute timeout is reached.</p>
+      <div class="analogy">💡 Analogy: After plugging in a new appliance, checking the indicator light turns green before walking away.</div>
+    </div>
+  </div>
+
+  <div class="connector"></div>
+
+  <!-- Done -->
+  <div class="step" style="text-align:center; cursor:default; border-color:var(--green);">
+    <div class="step-header" style="justify-content:center;">
+      <span style="font-size:1.5rem;">✅</span>
+      <span class="step-title" style="color:var(--green);">Operator Running &amp; Healthy</span>
+    </div>
+  </div>
+
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--yellow)"></div> Pre-task (validation)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent)"></div> Task (action)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div> Handler (conditional)</div>
+</div>
+
+<script>
+  document.querySelectorAll('.step[data-index]').forEach(el => {
+    el.addEventListener('click', () => {
+      const wasActive = el.classList.contains('active');
+      document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+      if (!wasActive) el.classList.add('active');
+    });
+  });
+</script>
+
+</body>
+</html>

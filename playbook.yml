@@ -1,0 +1,269 @@
+# ==============================================================================
+# MariaDB Operator Playbook
+# ==============================================================================
+#
+# PURPOSE
+# -------
+# This playbook automates the full lifecycle (install / upgrade / uninstall)
+# of the MariaDB Operator on a Kubernetes cluster using Helm.
+#
+# HOW TO RUN
+# ----------
+#   Install:    ansible-playbook playbook.yml -e @vault.yml --ask-vault-pass
+#   Uninstall:  ansible-playbook playbook.yml -e @vault.yml -e state=absent --ask-vault-pass
+#
+# WHAT IS AN "OPERATOR"?
+# ----------------------
+# An Operator is a small program that lives inside Kubernetes.  Its job is to
+# manage a specific application (here: MariaDB databases) automatically —
+# creating databases, handling backups, scaling, and recovery without needing
+# a human to log in and type commands.
+#
+# WHAT IS "HELM"?
+# ---------------
+# Helm is a package manager for Kubernetes — similar to "apt" on Ubuntu or
+# "brew" on macOS.  A Helm "chart" is a pre-packaged bundle of Kubernetes
+# files that describes how to install an application.
+# ==============================================================================
+
+- name: Deploy and manage lifecycle of MariaDB Operator on Kubernetes
+  # ---------------------------------------------------------------------------
+  # "hosts: localhost" + "connection: local" means Ansible runs on your own
+  # computer and talks to Kubernetes over the network.  No SSH is involved.
+  # ---------------------------------------------------------------------------
+  hosts: localhost
+  connection: local
+
+  # We don't need system facts (OS version, RAM, etc.) because everything
+  # happens inside Kubernetes, not on the local machine.
+  gather_facts: no
+
+  # ===========================================================================
+  # VARIABLES — settings that control the playbook's behaviour
+  # ===========================================================================
+  vars:
+    # ── Kubernetes access ────────────────────────────────────────────────────
+    # Path to the kubeconfig file that grants access to the cluster.
+    # By default, it reads the KUBECONFIG environment variable; if that is
+    # not set, it falls back to the standard location: ~/.kube/config
+    kubeconfig: "{{ lookup('env','KUBECONFIG') | default('~/.kube/config', true) }}"
+
+    # ── Operator & Helm release settings ─────────────────────────────────────
+    # "namespace" is a folder-like area inside Kubernetes that keeps the
+    # Operator's resources separate from the rest of the cluster.
+    namespace: "mariadb-operator"
+
+    # The name given to this particular installation of the Helm chart.
+    # Think of it like naming a shortcut on your desktop.
+    release_name: "mariadb-operator"
+
+    # The name of the Helm chart (package) to install.
+    chart_name: "mariadb-operator"
+
+    # The URL of the Helm repository — the "app store" where the chart lives.
+    repository_url: "https://presslabs.github.io/charts"
+
+    # Pin a specific chart version so upgrades are deliberate, not accidental.
+    # Change this when you've tested a newer version and are ready to upgrade.
+    chart_version: "0.8.0"
+
+    # The Kubernetes Deployment name that the chart creates for the Operator.
+    # Used later to wait for the Operator to become healthy after install.
+    operator_deployment_name: "mariadb-operator"
+
+    # How many copies (replicas) of the Operator pod should run.
+    # 1 is fine for most environments; increase for high-availability setups.
+    operator_replicas: 1
+
+    # ── Lifecycle control ────────────────────────────────────────────────────
+    # "present"  → install or upgrade the Operator
+    # "absent"   → uninstall the Operator (remove the Helm release)
+    state: "present"
+
+    # ── Secret management ────────────────────────────────────────────────────
+    # The root password for MariaDB.  This value MUST come from an
+    # ansible-vault encrypted file — never hardcode it here.
+    #
+    # Example usage:
+    #   ansible-playbook playbook.yml -e @vault.yml --ask-vault-pass
+    #
+    # If the variable is not supplied and state is "present", the playbook
+    # will fail with a clear error message (see the safety check below).
+    mariadb_root_password: "{{ mariadb_root_password | default(omit) }}"
+
+    # Name of the Kubernetes Secret object that will hold the password.
+    root_secret_name: "mariadb-root-password"
+
+  # ===========================================================================
+  # PRE-TASKS — checks that run BEFORE any main tasks
+  # ===========================================================================
+  pre_tasks:
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 1 — SAFETY CHECK
+    # Make sure the user provided the database root password when installing.
+    # If the password is missing and we're trying to install, stop immediately
+    # with a helpful error message instead of deploying a broken setup.
+    # ─────────────────────────────────────────────────────────────────────────
+    - name: "Assert required variables when state == present"
+      ansible.builtin.assert:
+        that:
+          # Read as: "either we're NOT installing, OR the password IS defined"
+          - "state != 'present' or (state == 'present' and mariadb_root_password is defined)"
+        fail_msg: >
+          "mariadb_root_password is required when state is 'present'.
+           Please supply it via ansible-vault:
+             ansible-playbook playbook.yml -e @vault.yml --ask-vault-pass"
+        success_msg: "Required variables are set — safe to proceed."
+
+  # ===========================================================================
+  # TASKS — the main work happens here, in order from top to bottom
+  # ===========================================================================
+  tasks:
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 2 — ADD HELM REPOSITORY
+    # Register the Presslabs chart repository with Helm.
+    # Analogy: adding a new "app store" so Helm knows where to find the
+    #          MariaDB Operator package.
+    # This is safe to run multiple times — if the repo already exists it
+    # is simply updated.
+    # ─────────────────────────────────────────────────────────────────────────
+    - name: "Add Helm repository for MariaDB Operator"
+      community.kubernetes.helm_repository:
+        name: "presslabs"                 # Local alias for the repository
+        repo_url: "{{ repository_url }}"  # The remote URL of the repository
+        state: present                    # Ensure the repo is registered
+      register: helm_repo_added           # Save result for possible later use
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 3 — CREATE KUBERNETES NAMESPACE
+    # Ensure the dedicated namespace exists in the cluster.
+    # Analogy: creating a folder to keep all MariaDB-related files together
+    #          so they don't get mixed up with other applications.
+    # ─────────────────────────────────────────────────────────────────────────
+    - name: "Ensure Kubernetes namespace exists"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1            # Namespaces are a core Kubernetes resource
+        kind: Namespace
+        name: "{{ namespace }}"    # "mariadb-operator"
+        state: present             # Create if missing, do nothing if it exists
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 4 — STORE THE ROOT PASSWORD AS A KUBERNETES SECRET
+    # Create (or update) an encrypted Secret inside the cluster that holds
+    # the MariaDB root password.
+    #
+    # WHY A SECRET?
+    #   Kubernetes Secrets are access-controlled objects.  Only pods and
+    #   users with the right permissions can read them.  This is much
+    #   safer than putting a password in a config file or environment
+    #   variable.
+    #
+    # "stringData" lets us pass the plain-text value from the Ansible vault;
+    # Kubernetes automatically base-64-encodes it when storing.
+    #
+    # This step is SKIPPED when state == "absent" (uninstalling) because
+    # there is no point creating a password for something being removed.
+    # ─────────────────────────────────────────────────────────────────────────
+    - name: "Create or update root password Secret (stored in cluster)"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        metadata:
+          name: "{{ root_secret_name }}"   # "mariadb-root-password"
+          namespace: "{{ namespace }}"      # Lives inside the operator namespace
+        type: Opaque                        # Generic secret type
+        stringData:
+          password: "{{ mariadb_root_password }}"
+        state: present
+      when: state == "present"   # ◀ Only runs during install/upgrade
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 5 — INSTALL OR UPGRADE THE MARIADB OPERATOR (HELM RELEASE)
+    # This is the main event.  Helm downloads the chart, renders it into
+    # Kubernetes manifests, and applies them to the cluster.
+    #
+    # KEY PARAMETERS EXPLAINED:
+    #   chart_ref / repository_url  — which package and where to get it
+    #   chart_version               — locked version for reproducibility
+    #   release_namespace           — install into our dedicated namespace
+    #   create_namespace: false     — we already created it in Step 3
+    #   wait: true                  — don't finish until all pods are running
+    #   wait_timeout: 600           — allow up to 10 minutes for startup
+    #   state                       — "present" to install, "absent" to remove
+    #
+    # The "notify" keyword tells Ansible: "after this task succeeds, also
+    # run the handler named 'Wait for operator deployment to become ready'."
+    # ─────────────────────────────────────────────────────────────────────────
+    - name: "Install / Upgrade MariaDB Operator Helm release"
+      community.kubernetes.helm:
+        kubeconfig: "{{ kubeconfig }}"
+        name: "{{ release_name }}"            # Helm release name
+        chart_ref: "{{ chart_name }}"         # Chart to install
+        repository_url: "{{ repository_url }}"
+        chart_version: "{{ chart_version }}"  # Pinned version
+        release_namespace: "{{ namespace }}"  # Target namespace
+        create_namespace: false               # Already created above
+        values:
+          # You can override default chart settings here.
+          # This creates a Kubernetes ServiceAccount for the Operator.
+          serviceAccount:
+            create: true
+          # If the chart supports referencing an existing secret for
+          # credentials, you would add that mapping here.  Example:
+          # operator:
+          #   rootPasswordSecretName: "{{ root_secret_name }}"
+        wait: true                 # Block until the deployment is healthy
+        wait_timeout: 600          # Maximum wait: 600 seconds (10 minutes)
+        state: "{{ state }}"       # "present" = install, "absent" = uninstall
+      notify: "Wait for operator deployment to become ready"
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # OPTIONAL — CREATE A SAMPLE DATABASE INSTANCE
+    # This task is DISABLED by default ("when: false").
+    # It shows how you would tell the Operator to create an actual MariaDB
+    # database after the Operator is running.
+    #
+    # To enable it, change "when: false" to "when: true" (or remove the line)
+    # and adjust the spec fields to match your operator version's CRD schema.
+    # ─────────────────────────────────────────────────────────────────────────
+    - name: "Optionally: Ensure sample MariaDB CR exists (disabled by default)"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: "mariadb.presslabs.org/v1alpha1"   # Operator's custom API
+          kind: "MariaDB"                                 # Custom Resource type
+          metadata:
+            name: "example-mariadb"
+            namespace: "{{ namespace }}"
+          spec:
+            replicas: 1           # One database instance
+            storage:
+              size: "1Gi"         # Reserve 1 GiB of disk space
+      when: false   # ◀ Change to "true" to enable this task
+
+  # ===========================================================================
+  # HANDLERS — tasks that run only when "notified" by a main task
+  # ===========================================================================
+  handlers:
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 6 — READINESS GATE
+    # After the Helm install finishes, this handler confirms the Operator
+    # Deployment has the expected number of healthy replicas.
+    #
+    # Handlers run at the END of the play (after all tasks), and only if the
+    # task that called "notify" actually made a change.  This avoids
+    # unnecessary waiting on repeat runs where nothing changed.
+    # ─────────────────────────────────────────────────────────────────────────
+    - name: "Wait for operator deployment to become ready"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ operator_deployment_name }}"   # "mariadb-operator"
+        namespace: "{{ namespace }}"
+        wait: true
+        wait_condition: "status.availableReplicas=={{ operator_replicas }}"
+        wait_timeout: 600   # Up to 10 minutes
